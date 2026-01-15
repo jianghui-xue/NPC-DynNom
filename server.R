@@ -125,24 +125,10 @@ dat.p <- reactive({
     }
     
     # 修改原来的 try.survfit 部分，加入更详细的错误捕获
-    survfit_result <- try(survfit(model, newdata = new.d()), silent = TRUE)
-    try.survfit <- !inherits(survfit_result, "try-error")
-    
-    # ---- 新增调试代码块开始 ----
-    cat("survfit 调用成功吗？", try.survfit, "\n")
-    if (!try.survfit) {
-      cat("survfit 错误信息:", attr(survfit_result, "condition")$message, "\n")
-    }
-    # ---- 新增调试代码块结束 ----
-    
-    if (try.survfit){
-      fit1 <- survfit_result # 使用成功的结果
-    } else {
-      # 如果失败，创建一个空的或不触发后续错误的 fit1 对象
-      # 或者直接返回一个空的数据框，避免程序崩溃
-      cat("警告：survfit 失败，创建空结构以避免崩溃。\n")
-      return(data.frame(time = numeric(), n.risk = numeric(), surv = numeric(), event = numeric(), part = integer()))
-    }
+    try.survfit <- !any(class(try(survfit(model, newdata = new.d()), silent = TRUE)) == "try-error")
+if (try.survfit){
+  fit1 <- survfit(model, newdata = new.d())
+}
     # ... 后续的 sff 等处理代码保持不变 ...
                sff <- cbind(sub.fit1, event=NULL, part = NULL)
                b <<- b - 1
@@ -253,6 +239,7 @@ output$summary <- renderPrint({
 summary(model)
 })
 }
+
 
 
 
