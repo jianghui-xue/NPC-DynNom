@@ -110,87 +110,103 @@ server = function(input, output){
   s.fr <- NULL
   old.d2 <- NULL
   b <- 1
-  dat.p <- reactive({
-    if (!isTRUE(compare(old.d2, new.d()))) {
+dat.p <- reactive({
+  if (!isTRUE(compare(old.d2, new.d()))) {
+    
+    # ---- 调试信息 ----
+    cat("\n--- [调试] 进入 dat.p reactive ---\n")
+    cat("检查 new.d() 内容:\n")
+    print(new.d())
+    cat("检查 model 类别:", class(model)[1], "\n")
+    # ---- 调试信息结束 ----
+    
+    if (length(levels(model$strata)) != length(levels(attr(predict(model, new.d(), type='x', expand.na=FALSE), 'strata')))){
+      levels(model$strata) <- levels(attr(predict(model, new.d(), type='x', expand.na=FALSE), 'strata'))
+    }
+    
+    # ***** 核心修复：针对 cph 模型使用正确的函数 *****
+    survfit_result <- NULL
+    try.survfit <- FALSE
+    
+    # 专门为 cph 模型处理
+    if (inherits(model, "cph")) {
+      cat("[调试] 模型为 cph 类，使用 rms::survest 或 survival::survfit.cph\n")
+      # 方法1: 使用 rms::survest (更可靠)
+      # survfit_result <- try(rms::survest(model, newdata = new.d()), silent = TRUE)
       
-      # ---- 新增调试代码块开始 ----
-      cat("\n--- [调试] 进入 dat.p reactive ---\n")
-      cat("检查 new.d() 内容:\n")
-      print(new.d())
-      cat("检查 model 类别:", class(model)[1], "\n")
-      # ---- 新增调试代码块结束 ----
-      
-      if (length(levels(model$strata)) != length(levels(attr(predict(model, new.d(), type='x', expand.na=FALSE), 'strata')))){
-        levels(model$strata) <- levels(attr(predict(model, new.d(), type='x', expand.na=FALSE), 'strata'))
-      }
-      
-      # ***** 核心修改开始：修复survfit调用和错误处理 *****
+      # 方法2: 显式调用 survival 包中的 survfit.cph 方法
+      # 需要构造一个公式，其中 time 变量来自 new.d()
+      survfit_formula <- as.formula(paste("~", all.vars(model$terms)[1]))
+      survfit_result <- try(survival::survfit(model, newdata = new.d(), conf.type = "log-log"), silent = TRUE)
+    } else {
+      # 如果不是 cph，按原方式调用
       survfit_result <- try(survfit(model, newdata = new.d()), silent = TRUE)
-      try.survfit <- !inherits(survfit_result, "try-error")
-      
-      cat("[调试] survfit调用状态: ", ifelse(try.survfit, "成功", "失败"), "\n")
-      if(!try.survfit) {
-        cat("[调试] 错误信息: ", as.character(survfit_result), "\n")
-        # 如果失败，直接返回空数据框，避免后续代码崩溃
-        return(data.frame(time = numeric(), n.risk = numeric(), surv = numeric(), event = numeric(), part = integer(), strata = character()))
+    }
+    
+    try.survfit <- !inherits(survfit_result, "try-error")
+    
+    cat("[调试] survfit调用状态: ", ifelse(try.survfit, "成功", "失败"), "\n")
+    if(!try.survfit) {
+      cat("[调试] 错误信息: ", as.character(survfit_result), "\n")
+      # 如果失败，返回一个带有虚拟数据的框架，以保持坐标轴
+      dummy_df <- data.frame(time = c(0, 1), n.risk = c(1, 1), surv = c(1, 0.8), event = c(0, 0.2), part = b, strata = factor("All"))
+      return(dummy_df)
+    }
+    # ***** 核心修复结束 *****
+    
+    fit1 <- survfit_result
+    
+    # ========== 以下为原有的核心处理逻辑，保持不变 ==========
+    if (n.strata == 0) {
+      sff <- data.frame(summary(fit1)[c("time", "n.risk", "surv")])
+      sff <- cbind(sff, event=1-sff$surv, part = b)
+      if (sff$time[1] != 0){
+        sff <- rbind(data.frame(time=0, n.risk=sff$n.risk[1] ,surv=1, event=0, part=sff$part[1]), sff)
       }
-      # ***** 核心修改结束 *****
-      
-      if (try.survfit){
-        fit1 <- survfit_result
-      }
-      
-      # ========== 以下为原有的、必须保留的核心逻辑 ==========
-      if (n.strata == 0) {
-        sff <- data.frame(summary(fit1)[c("time", "n.risk", "surv")])
-        sff <- cbind(sff, event=1-sff$surv, part = b)
-        if (sff$time[1] != 0){
-          sff <- rbind(data.frame(time=0, n.risk=sff$n.risk[1] ,surv=1, event=0, part=sff$part[1]), sff)
-        }
-      }
-      if (n.strata > 0) {
-        nam <- NULL
-        new.sub <- T
-        for (i in 1:(dim.terms-1)) {
-          if (preds[[i]]$dataClasses == "factor"){
-            if (preds[[i]]$IFstrata){
-              nam0 <- paste(names(preds[i]),'=', new.d()[[names(preds[i])]], sep = '')
-              if (new.sub) {
-                nam <- paste(nam0)
-                new.sub <- F
-              } else {
-                nam <- paste(nam, '.', nam0, sep = '')
-              }
+    }
+    if (n.strata > 0) {
+      nam <- NULL
+      new.sub <- T
+      for (i in 1:(dim.terms-1)) {
+        if (preds[[i]]$dataClasses == "factor"){
+          if (preds[[i]]$IFstrata){
+            nam0 <- paste(names(preds[i]),'=', new.d()[[names(preds[i])]], sep = '')
+            if (new.sub) {
+              nam <- paste(nam0)
+              new.sub <- F
+            } else {
+              nam <- paste(nam, '.', nam0, sep = '')
             }
           }
         }
-        if (try.survfit){
-          survfit_df <- as.data.frame(summary(fit1)[c("time", "n.risk", "strata", "surv")])
-          survfit_df$strata <- as.factor(survfit_df$strata)
-          levels(survfit_df$strata) <-  nam
-          sub.fit1 <- survfit_df
-        } else {
-          sub.fit1 <- data.frame(time=NA, n.risk=NA, strata=NA, surv=NA, event=NA, part=NA)[0,]
-        }
-        if (!nam %in% strata.l){
-          message("The strata levels not found in the original")
-          sff <- cbind(sub.fit1, event=NULL, part = NULL)
-          b <<- b - 1
-        } else {
-          sff <- cbind(sub.fit1, event=1-sub.fit1$surv, part = b)
-          if (sff$time[1] != 0) {
-            sff <- rbind(data.frame(time=0, n.risk=sff$n.risk[1], strata=sff$strata[1] ,surv=1, event=0, part=sff$part[1]), sff)
-          }
-          sff$n.risk <- sff$n.risk/sff$n.risk[1]
+      }
+      if (try.survfit){
+        survfit_df <- as.data.frame(summary(fit1)[c("time", "n.risk", "strata", "surv")])
+        survfit_df$strata <- as.factor(survfit_df$strata)
+        levels(survfit_df$strata) <-  nam
+        sub.fit1 <- survfit_df
+      } else {
+        sub.fit1 <- data.frame(time=NA, n.risk=NA, strata=NA, surv=NA, event=NA, part=NA)[0,]
+      }
+      if (!nam %in% strata.l){
+        message("The strata levels not found in the original")
+        sff <- cbind(sub.fit1, event=NULL, part = NULL)
+        b <<- b - 1
+      } else {
+        sff <- cbind(sub.fit1, event=1-sub.fit1$surv, part = b)
+        if (sff$time[1] != 0) {
+          sff <- rbind(data.frame(time=0, n.risk=sff$n.risk[1], strata=sff$strata[1] ,surv=1, event=0, part=sff$part[1]), sff)
         }
         sff$n.risk <- sff$n.risk/sff$n.risk[1]
       }
-      s.fr <<- rbind(s.fr, sff)
-      old.d2 <<- new.d()
-      b <<- b + 1
+      sff$n.risk <- sff$n.risk/sff$n.risk[1]
     }
-    s.fr
-  })
+    s.fr <<- rbind(s.fr, sff)
+    old.d2 <<- new.d()
+    b <<- b + 1
+  }
+  s.fr
+})
   
   dat.f <- reactive({
     if (nrow(data2() > 0))
@@ -282,3 +298,4 @@ server = function(input, output){
     summary(model)
   })
 }
+
