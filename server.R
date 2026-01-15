@@ -1,3 +1,9 @@
+cat("=== server.R 开始执行 ===\n")
+cat("检查 fit1 是否存在:", exists("fit1"), "\n")
+if(exists("fit1")) {
+  cat("fit1 的类别:", class(fit1)[1], "\n")
+}
+cat("========================\n\n")
 server = function(input, output){
 observe({if (input$quit == 1)
           stopApp()})
@@ -257,3 +263,4 @@ output$summary <- renderPrint({
 summary(model)
 })
 }
+
